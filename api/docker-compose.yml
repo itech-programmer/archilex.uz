@@ -1,0 +1,111 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: dev
+    container_name: dictionary-app
+    restart: unless-stopped
+    working_dir: /var/www
+    env_file:
+      - .env
+    volumes:
+      - .:/var/www
+      - vendor_data:/var/www/vendor
+      - ./.docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini:ro
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_DEBUG: ${APP_DEBUG:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dictionary
+
+  nginx:
+    image: nginx:alpine
+    container_name: dictionary-nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - .:/var/www:ro
+      - ./.docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    networks:
+      - dictionary
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dictionary-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-dictionary}
+      POSTGRES_USER: ${DB_USERNAME:-laravel}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-laravel} -d ${DB_DATABASE:-dictionary}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - dictionary
+
+  redis:
+    image: redis:7-alpine
+    container_name: dictionary-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - dictionary
+
+  queue:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      target: dev
+    container_name: dictionary-queue
+    restart: unless-stopped
+    command: php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+    working_dir: /var/www
+    env_file:
+      - .env
+    volumes:
+      - .:/var/www
+      - vendor_data:/var/www/vendor
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_DEBUG: ${APP_DEBUG:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+    networks:
+      - dictionary
+
+volumes:
+  postgres_data:
+  redis_data:
+  vendor_data:
+
+networks:
+  dictionary:
+    driver: bridge
